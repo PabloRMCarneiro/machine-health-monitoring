@@ -23,5 +23,6 @@
 	"postStartCommand": "sudo systemctl start mosquitto",
 	"mounts": [
 		"source=${localWorkspaceFolder},target=/workspace,type=bind,consistency=cached"
-	]
+	],
+	"workspaceFolder": "/workspace"
 }

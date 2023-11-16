@@ -3,15 +3,46 @@
 #include <chrono>
 #include <thread>
 #include <unistd.h>
+#include <vector>
+#include <sstream>
+#include <string>
 #include "json.hpp" 
 #include "mqtt/client.h" 
+#include <boost/asio.hpp>
 
 #define QOS 1
 #define BROKER_ADDRESS "tcp://localhost:1883"
 #define GRAPHITE_HOST "graphite"
 #define GRAPHITE_PORT 2003
 
+namespace asio = boost::asio;
+using asio::ip::tcp;
+
 void post_metric(const std::string& machine_id, const std::string& sensor_id, const std::string& timestamp_str, const int value) {
+    try {
+        boost::asio::io_service io_service;
+        
+        // Resolve the host and port.
+        tcp::resolver resolver(io_service);
+        tcp::resolver::query query(GRAPHITE_HOST, std::to_string(GRAPHITE_PORT));
+        tcp::resolver::iterator endpoint_iterator = resolver.resolve(query);
+        
+        // Create and connect the socket.
+        tcp::socket socket(io_service);
+        boost::asio::connect(socket, endpoint_iterator);
+        
+        // Format the metric.
+        std::string metric_path = machine_id + "." + sensor_id;
+        std::string message = metric_path + " " + std::to_string(value) + " " + timestamp_str + "\n";
+        
+        // Send the metric to Graphite.
+        boost::system::error_code ignored_error;
+        boost::asio::write(socket, boost::asio::buffer(message), ignored_error);
+        
+        // The destructor of the socket will close the connection.
+    } catch (std::exception& e) {
+        std::cerr << "Exception: " << e.what() << std::endl;
+    }
 
 }
 
