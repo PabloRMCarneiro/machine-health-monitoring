@@ -11,6 +11,9 @@
 #include <fstream>
 #include <sstream>
 #include <string>
+#include <boost/uuid/uuid.hpp>
+#include <boost/uuid/uuid_generators.hpp>
+#include <boost/uuid/uuid_io.hpp>
 
 #define QOS 1
 #define BROKER_ADDRESS "tcp://localhost:1883"
@@ -26,11 +29,9 @@ struct SensorInfo {
 
 std::string getMachineId()
 {
-    char hostname[1024];
-    gethostname(hostname, 1024);
-    std::string machineID(hostname);
-
-    return machineID;
+    boost::uuids::random_generator generator;
+    boost::uuids::uuid uuid = generator();
+    return boost::uuids::to_string(uuid);
 }
 
 long long stringToLongLong(const std::string &str)

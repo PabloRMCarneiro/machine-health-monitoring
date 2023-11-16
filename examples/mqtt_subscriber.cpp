@@ -2,7 +2,6 @@
 
 const std::string SERVER_ADDRESS("tcp://localhost:1883");
 const std::string CLIENT_ID("ExampleSubscriber");
-const std::string TOPIC("test/topic");
 
 class callback : public virtual mqtt::callback {
 public:
@@ -12,6 +11,8 @@ public:
 };
 
 int main(int argc, char* argv[]) {
+    const std::string id = argv[1];
+    const std::string TOPIC("/sensors/+/" + id);
     mqtt::async_client client(SERVER_ADDRESS, CLIENT_ID);
     callback cb;
     client.set_callback(cb);

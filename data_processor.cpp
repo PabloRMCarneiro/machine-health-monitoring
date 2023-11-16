@@ -12,13 +12,21 @@
 
 #define QOS 1
 #define BROKER_ADDRESS "tcp://localhost:1883"
-#define GRAPHITE_HOST "graphite"
+#define GRAPHITE_HOST "127.0.0.1"
 #define GRAPHITE_PORT 2003
 
 namespace asio = boost::asio;
 using asio::ip::tcp;
 
-void post_metric(const std::string& machine_id, const std::string& sensor_id, const std::string& timestamp_str, const int value) {
+std::string timestamp2UNIX(const std::string& timestamp){
+    std::tm t = {};
+    std::istringstream ss(timestamp);
+    ss >> std::get_time(&t, "%Y-%m-%dT%H:%M:%S");
+    std::time_t time_stamp = mktime(&t);
+    return std::to_string(time_stamp);
+}
+
+void post_metric(const std::string& machine_id, const std::string& sensor_id, const std::string& timestamp_str, const float value) {
     try {
         boost::asio::io_service io_service;
         
@@ -33,12 +41,13 @@ void post_metric(const std::string& machine_id, const std::string& sensor_id, co
         
         // Format the metric.
         std::string metric_path = machine_id + "." + sensor_id;
-        std::string message = metric_path + " " + std::to_string(value) + " " + timestamp_str + "\n";
+        std::string message = metric_path + " " + std::to_string(value) + " " + timestamp2UNIX(timestamp_str) + "\n";
         
         // Send the metric to Graphite.
         boost::system::error_code ignored_error;
         boost::asio::write(socket, boost::asio::buffer(message), ignored_error);
         
+        std::cout << "Metric sent: " << message << std::endl;
         // The destructor of the socket will close the connection.
     } catch (std::exception& e) {
         std::cerr << "Exception: " << e.what() << std::endl;
@@ -73,7 +82,7 @@ int main(int argc, char* argv[]) {
             std::string sensor_id = topic_parts[3];
 
             std::string timestamp = j["timestamp"];
-            int value = j["value"];
+            float value = j["value"];
             post_metric(machine_id, sensor_id, timestamp, value);
         }
     };
@@ -87,7 +96,7 @@ int main(int argc, char* argv[]) {
     connOpts.set_clean_session(true);
 
     try {
-        client.connect(connOpts);
+        client.connect(connOpts)->wait();
         client.subscribe("/sensors/#", QOS);
     } catch (mqtt::exception& e) {
         std::cerr << "Error: " << e.what() << std::endl;
