@@ -29,9 +29,18 @@ struct SensorInfo {
 
 std::string getMachineId()
 {
-    boost::uuids::random_generator generator;
-    boost::uuids::uuid uuid = generator();
-    return boost::uuids::to_string(uuid);
+    std::ifstream file("/proc/sys/kernel/random/boot_id");
+    std::string machineId;
+    if (file.is_open())
+    {
+        file >> machineId;
+        file.close();
+    }
+    else
+    {
+        machineId = "unknown";
+    }
+    return machineId;
 }
 
 long long stringToLongLong(const std::string &str)
@@ -190,6 +199,7 @@ int main(int argc, char *argv[])
     std::clog << "connected to the broker" << std::endl;
 
     std::string machineId = getMachineId();
+    // std::cout << machineId << std::endl;
 
     std::vector<SensorInfo> sensors;
 
