@@ -36,6 +36,26 @@ std::string UNIX2timestamp(const std::time_t &timestamp)
     return std::string(buffer);
 }
 
+std::map<std::pair<std::string, std::string>, std::vector<float>> sensor_values_history;
+
+// Função para calcular a média e desvio padrão.
+std::pair<float, float> calculate_mean_stddev(const std::vector<float>& data) {
+    float mean = std::accumulate(data.begin(), data.end(), 0.0) / data.size();
+    float sq_sum = std::inner_product(data.begin(), data.end(), data.begin(), 0.0);
+    float stddev = std::sqrt(sq_sum / data.size() - mean * mean);
+    return {mean, stddev};
+}
+
+// Função para detecção de outliers.
+bool is_outlier(float value, const std::vector<float>& data) {
+    if(data.size() < 2) return false; // Não podemos determinar um outlier com menos de 2 dados.
+    
+    auto [mean, stddev] = calculate_mean_stddev(data);
+    float z_score = (value - mean) / stddev;
+    return std::abs(z_score) > 3; // Considera-se outlier um valor com escore Z maior que 3.
+    // https://www.analyticsvidhya.com/blog/2022/08/dealing-with-outliers-using-the-z-score-method/
+}
+
 void post_metric(const std::string &machine_id, const std::string &sensor_id, const std::string &timestamp_str, const float value)
 {
     try
@@ -69,22 +89,37 @@ void post_metric(const std::string &machine_id, const std::string &sensor_id, co
 
 std::map<std::pair<std::string, std::string>, std::time_t> last_sensor_activity;
 
-void check_inactivity_and_post_alarm()
+void processing_data_mosquitto()
 {
+    const int timeInactivity = 0;
     std::time_t current_time = std::time(nullptr);
     for (auto &activity : last_sensor_activity)
     {
+        std::pair<std::string, std::string> machine_sensor_pair = activity.first;
+        float current_sensor_value;
         std::time_t last_time = activity.second;
         std::string machine_id = activity.first.first;
         std::string sensor_id = activity.first.second;
 
-        if (current_time - last_time > 10)
+        if (current_time - last_time > 10) // pegar esse valor de diferença da diferença entre dois tempos de envio do sensor e multiplicar por 10
         {
             std::string alarm_path = machine_id + ".alarms.inactive";
             std::string message = alarm_path + " 1 " + UNIX2timestamp(current_time) + "\n";
             // Envie o alarme para o Graphite.
             post_metric(machine_id, "alarms.inactive", UNIX2timestamp(current_time), 1);
         }
+        if (sensor_values_history.find(machine_sensor_pair) != sensor_values_history.end()) {
+                if (is_outlier(current_sensor_value, sensor_values_history[machine_sensor_pair])) {
+                    std::string alarm_path = machine_sensor_pair.first + ".alarms.outlier";
+                    std::string message = alarm_path + " 1 " + UNIX2timestamp(std::time(nullptr)) + "\n";
+                    post_metric(machine_sensor_pair.first, "alarms.outlier", UNIX2timestamp(std::time(nullptr)), 1);
+                    std::cout << "Outlier detected for " << machine_sensor_pair.second << ": " << current_sensor_value << std::endl;
+                }
+            }
+
+            // Atualizar histórico de valores do sensor.
+            sensor_values_history[machine_sensor_pair].push_back(current_sensor_value);
+
     }
 }
 
@@ -124,6 +159,9 @@ int main(int argc, char *argv[])
 
             std::pair<std::string, std::string> machine_sensor_pair = {machine_id, sensor_id};
             last_sensor_activity[machine_sensor_pair] = std::time(nullptr);
+            
+            sensor_values_history[machine_sensor_pair].push_back(value);
+
         }
     };
 
@@ -148,8 +186,8 @@ int main(int argc, char *argv[])
 
     while (true)
     {
-        check_inactivity_and_post_alarm();
-        std::this_thread::sleep_for(std::chrono::seconds(1));
+        processing_data_mosquitto();
+        std::this_thread::sleep_for(std::chrono::seconds(1)); // depois modificar o tempo para assim que chegar uma mensagem processar
     }
 
     return EXIT_SUCCESS;

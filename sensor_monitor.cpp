@@ -4,8 +4,8 @@
 #include <ctime>
 #include <thread>
 #include <unistd.h>
-#include "json.hpp"      // json handling
-#include "mqtt/client.h" // paho mqtt
+#include "json.hpp"      
+#include "mqtt/client.h" 
 #include <iomanip>
 #include <iostream>
 #include <fstream>
@@ -97,7 +97,6 @@ float getUsedMemoryInGB()
     }
     else
     {
-        // Unable to read memory info, return error value
         return -1;
     }
 }
@@ -109,13 +108,11 @@ float getCpuTemperature()
     if (file.is_open())
     {
         file >> temp;
-        // The temperature is usually reported as millidegrees Celsius, so convert to degrees
         temp /= 1000;
         file.close();
     }
     else
     {
-        // Unable to read temperature, return error value
         temp = -1;
     }
     return temp;
@@ -179,7 +176,7 @@ void readAndPublishSensorData(mqtt::client& client, const std::string& machineId
 
 int main(int argc, char *argv[])
 {
-    std::string clientId = "sensor-monitor";
+    std::string clientId = argv[1]; // "sensor_monitor " + argv[1];
     mqtt::client client(BROKER_ADDRESS, clientId);
 
     // Connect to the MQTT broker.
@@ -198,8 +195,8 @@ int main(int argc, char *argv[])
     }
     std::clog << "connected to the broker" << std::endl;
 
-    std::string machineId = getMachineId();
-    // std::cout << machineId << std::endl;
+    std::string machineId = argv[1];
+    // std::string machineId = getMachineId();
 
     std::vector<SensorInfo> sensors;
 
