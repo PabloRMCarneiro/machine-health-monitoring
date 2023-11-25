@@ -55,7 +55,7 @@ bool is_outlier(float value, const std::vector<float> &data)
 
     auto [mean, stddev] = calculate_mean_stddev(data);
     float z_score = (value - mean) / stddev;
-    return std::abs(z_score) > 0.2; // Considera-se outlier um valor com escore Z maior que 3.
+    return std::abs(z_score) > 3; // Considera-se outlier um valor com escore Z maior que 3.
     // https://www.analyticsvidhya.com/blog/2022/08/dealing-with-outliers-using-the-z-score-method/
 }
 
