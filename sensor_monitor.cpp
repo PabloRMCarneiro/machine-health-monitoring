@@ -176,6 +176,11 @@ void readAndPublishSensorData(mqtt::client& client, const std::string& machineId
 
 int main(int argc, char *argv[])
 {
+    if(argc != 3) {
+        std::cerr << "Usage: " << argv[0] << " <machine_id> <interval>" << std::endl;
+        return EXIT_FAILURE;
+    }
+    
     std::string clientId = argv[1]; // "sensor_monitor " + argv[1];
     mqtt::client client(BROKER_ADDRESS, clientId);
 
@@ -200,8 +205,8 @@ int main(int argc, char *argv[])
 
     std::vector<SensorInfo> sensors;
 
-    sensors.emplace_back("cpu_temperature", "float", 1000);
-    sensors.emplace_back("used_memory", "float", 1000);
+    sensors.emplace_back("cpu_temperature", "float", std::stoi(argv[2]));
+    sensors.emplace_back("used_memory", "float", std::stoi(argv[2]));
 
     // publish initial message
 

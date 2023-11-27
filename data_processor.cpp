@@ -19,6 +19,19 @@
 namespace asio = boost::asio;
 using asio::ip::tcp;
 
+
+std::chrono::steady_clock::time_point start_time = std::chrono::steady_clock::now();
+
+double calculate_frequency()
+{
+    std::chrono::steady_clock::time_point end_time = std::chrono::steady_clock::now();
+    std::chrono::duration<double> elapsed_seconds = end_time - start_time;
+
+    start_time = end_time;
+    
+    return elapsed_seconds.count();
+}
+
 std::string timestamp2UNIX(const std::string &timestamp)
 {
     std::tm t = {};
@@ -38,24 +51,22 @@ std::string UNIX2timestamp(const std::time_t &timestamp)
 
 std::map<std::pair<std::string, std::string>, std::vector<float>> sensor_values_history;
 
-// Função para calcular a média e desvio padrão.
 std::pair<float, float> calculate_mean_stddev(const std::vector<float> &data)
 {
-    float mean = std::accumulate(data.begin(), data.end(), 0.0) / data.size();
-    float sq_sum = std::inner_product(data.begin(), data.end(), data.begin(), 0.0);
+    float mean = std::accumulate(data.begin(), data.end(), 0.0) / data.size(); // soma os valores do vetor e divide pelo tamanho do vetor
+    float sq_sum = std::inner_product(data.begin(), data.end(), data.begin(), 0.0); // multiplica os valores do vetor por ele mesmo e soma
     float stddev = std::sqrt(sq_sum / data.size() - mean * mean);
     return {mean, stddev};
 }
 
-// Função para detecção de outliers.
 bool is_outlier(float value, const std::vector<float> &data)
 {
     if (data.size() < 2)
-        return false; // Não podemos determinar um outlier com menos de 2 dados.
+        return false;
 
     auto [mean, stddev] = calculate_mean_stddev(data);
     float z_score = (value - mean) / stddev;
-    return std::abs(z_score) > 3; // Considera-se outlier um valor com escore Z maior que 3.
+    return std::abs(z_score) > 3;
     // https://www.analyticsvidhya.com/blog/2022/08/dealing-with-outliers-using-the-z-score-method/
 }
 
@@ -65,20 +76,16 @@ void post_metric(const std::string &machine_id, const std::string &sensor_id, co
     {
         boost::asio::io_service io_service;
 
-        // Resolve the host and port.
         tcp::resolver resolver(io_service);
         tcp::resolver::query query(GRAPHITE_HOST, std::to_string(GRAPHITE_PORT));
         tcp::resolver::iterator endpoint_iterator = resolver.resolve(query);
 
-        // Create and connect the socket.
         tcp::socket socket(io_service);
         boost::asio::connect(socket, endpoint_iterator);
 
-        // Format the metric.
         std::string metric_path = machine_id + "." + sensor_id;
         std::string message = metric_path + " " + std::to_string(value) + " " + timestamp2UNIX(timestamp_str) + "\n";
 
-        // Send the metric to Graphite.
         boost::system::error_code ignored_error;
         boost::asio::write(socket, boost::asio::buffer(message), ignored_error);
 
@@ -91,10 +98,12 @@ void post_metric(const std::string &machine_id, const std::string &sensor_id, co
 }
 
 std::map<std::pair<std::string, std::string>, std::time_t> last_sensor_activity;
+int frequency_sensor = 0;
 
 void processing_data_mosquitto()
 {
     std::time_t current_time = std::time(nullptr);
+    double frequency_sensor = calculate_frequency() * 10;
     for (auto &activity : last_sensor_activity)
     {
         std::pair<std::string, std::string> machine_sensor_pair = activity.first;
@@ -102,13 +111,14 @@ void processing_data_mosquitto()
         std::string machine_id = activity.first.first;
         std::string sensor_id = activity.first.second;
 
-        if (current_time - last_time > 10) // Valor de exemplo para inatividade
+        if (current_time - last_time >= frequency_sensor && last_sensor_activity.size() != 0) // Valor de exemplo para inatividade
         {
             std::string alarm_path = machine_id + ".alarms.inactive." + sensor_id;
             std::string message = alarm_path + " 1 " + UNIX2timestamp(current_time) + "\n";
             // Envie o alarme de inatividade individual para o Graphite.
             post_metric(machine_id, "alarms.inactive." + sensor_id, UNIX2timestamp(current_time), 1);
         }
+
     }
 }
 std::vector<std::string> split(const std::string &str, char delim)
@@ -147,8 +157,6 @@ int main(int argc, char *argv[])
 
             std::pair<std::string, std::string> machine_sensor_pair = {machine_id, sensor_id};
             last_sensor_activity[machine_sensor_pair] = std::time(nullptr);
-
-            sensor_values_history[machine_sensor_pair].push_back(value);
 
             // Verificar se o valor atual é um outlier.
             if (sensor_values_history.find(machine_sensor_pair) != sensor_values_history.end())
