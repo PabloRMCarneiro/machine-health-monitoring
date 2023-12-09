@@ -4,8 +4,8 @@
 #include <ctime>
 #include <thread>
 #include <unistd.h>
-#include "json.hpp"      
-#include "mqtt/client.h" 
+#include "json.hpp"
+#include "mqtt/client.h"
 #include <iomanip>
 #include <iostream>
 #include <fstream>
@@ -18,14 +18,17 @@
 #define QOS 1
 #define BROKER_ADDRESS "tcp://localhost:1883"
 
-struct SensorInfo {
+struct SensorInfo
+{
     std::string id;
     std::string type;
     int interval;
-    // Constructor
     SensorInfo(std::string id, std::string type, int interval)
         : id(id), type(type), interval(interval) {}
 };
+
+int messagesSent = 0;
+std::vector<SensorInfo> sensors;
 
 std::string getMachineId()
 {
@@ -118,11 +121,13 @@ float getCpuTemperature()
     return temp;
 }
 
-void publishInitialMessage(mqtt::client& client, const std::string& machineId, const std::vector<SensorInfo>& sensors) {
+void publishInitialMessage(mqtt::client &client, const std::string &machineId)
+{
     nlohmann::json j;
     j["machine_id"] = machineId;
 
-    for (const auto& sensor : sensors) {
+    for (const auto &sensor : sensors)
+    {
         nlohmann::json sensor_info;
         sensor_info["sensor_id"] = sensor.id;
         sensor_info["data_type"] = sensor.type;
@@ -133,55 +138,75 @@ void publishInitialMessage(mqtt::client& client, const std::string& machineId, c
     mqtt::message msg("/sensor_monitors", j.dump(), QOS, false);
     client.publish(msg);
 
-    std::cout << "message published - topic: " << "/sensor_monitors" << " - message: " << j.dump() << std::endl;
+    std::cout << "INITIAL -> message published - topic: "
+              << "/sensor_monitors"
+              << " - message: " << j.dump() << std::endl;
 }
 
-void readAndPublishSensorData(mqtt::client& client, const std::string& machineId, const SensorInfo& sensor) {
-    while (true) {
-        // Simulate sensor data collection
-        float sensorValue;
-        if (sensor.id == "cpu_temperature") {
-            sensorValue = getCpuTemperature();
-        } else if (sensor.id == "used_memory") {
-            sensorValue = getUsedMemoryInGB();
-        } else {
-            // Handle unknown sensor
-            std::cerr << "Unknown sensor ID: " << sensor.id << std::endl;
-            continue;
+void readAndPublishSensorData(mqtt::client &client, const std::string &machineId, const SensorInfo &sensor)
+{
+    while (true)
+    {
+
+        if (messagesSent >= sensors.size() * 10)
+        {
+            publishInitialMessage(client, machineId);
+            messagesSent = 0;
         }
+        else
+        {
 
-        // Get current time as ISO 8601 formatted string
-        auto now = std::chrono::system_clock::now();
-        std::time_t now_c = std::chrono::system_clock::to_time_t(now);
-        std::tm* now_tm = std::localtime(&now_c);
-        std::stringstream ss;
-        ss << std::put_time(now_tm, "%FT%TZ");
-        std::string timestamp = ss.str();
+            float sensorValue;
+            if (sensor.id == "cpu_temperature")
+            {
+                sensorValue = getCpuTemperature();
+            }
+            else if (sensor.id == "used_memory")
+            {
+                sensorValue = getUsedMemoryInGB();
+            }
+            else
+            {
+                std::cerr << "Unknown sensor ID: " << sensor.id << std::endl;
+                continue;
+            }
 
-        // Construct JSON message
-        nlohmann::json j;
-        j["timestamp"] = timestamp;
-        j["value"] = sensorValue;
+            // Get current time as ISO 8601 formatted string
+            auto now = std::chrono::system_clock::now();
+            std::time_t now_c = std::chrono::system_clock::to_time_t(now);
+            std::tm *now_tm = std::localtime(&now_c);
+            std::stringstream ss;
+            ss << std::put_time(now_tm, "%FT%TZ");
+            std::string timestamp = ss.str();
 
-        // Publish the JSON message to the appropriate topic
-        std::string topic = "/sensors/" + machineId + "/" + sensor.id;
-        mqtt::message msg(topic, j.dump(), QOS, false);
-        client.publish(msg);
+            // Construct JSON message
+            nlohmann::json j;
+            j["timestamp"] = timestamp;
+            j["value"] = sensorValue;
 
-        // Sleep for the interval specified for the sensor
-        std::cout << "message published - topic: " << topic << " - message: " << j.dump() << std::endl;
-        std::this_thread::sleep_for(std::chrono::milliseconds(sensor.interval));
+            // Publish the JSON message to the appropriate topic
+            std::string topic = "/sensors/" + machineId + "/" + sensor.id;
+            mqtt::message msg(topic, j.dump(), QOS, false);
+            client.publish(msg);
+
+            // Sleep for the interval specified for the sensor
+            std::cout << "message published - topic: " << topic << " - message: " << j.dump() << std::endl;
+
+            messagesSent++;
+            std::this_thread::sleep_for(std::chrono::milliseconds(sensor.interval));
+        }
     }
 }
 
 int main(int argc, char *argv[])
 {
-    if(argc != 3) {
-        std::cerr << "Usage: " << argv[0] << " <machine_id> <interval>" << std::endl;
+    if (argc != 3)
+    {
+        std::cerr << "Usage: " << argv[0] << " <machine_id> <interval (ms)>" << std::endl;
         return EXIT_FAILURE;
     }
-    
-    std::string clientId = argv[1]; // "sensor_monitor " + argv[1];
+
+    std::string clientId = argv[1];
     mqtt::client client(BROKER_ADDRESS, clientId);
 
     // Connect to the MQTT broker.
@@ -203,22 +228,23 @@ int main(int argc, char *argv[])
     std::string machineId = argv[1];
     // std::string machineId = getMachineId();
 
-    std::vector<SensorInfo> sensors;
+
 
     sensors.emplace_back("cpu_temperature", "float", std::stoi(argv[2]));
     sensors.emplace_back("used_memory", "float", std::stoi(argv[2]));
 
     // publish initial message
+    publishInitialMessage(client, machineId);
 
-    publishInitialMessage(client, machineId, sensors);
-
-    for (const auto& sensor : sensors) {
+    for (const auto &sensor : sensors)
+    {
         std::thread(readAndPublishSensorData, std::ref(client), machineId, sensor).detach();
     }
 
     // The main thread can do other tasks or just wait
-    while (true) {
-        std::this_thread::sleep_for(std::chrono::seconds(1));
+    while (true)
+    {
+        std::this_thread::sleep_for(std::chrono::milliseconds(std::stoi(argv[2])));
     }
 
     return EXIT_SUCCESS;

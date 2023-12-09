@@ -19,18 +19,20 @@
 namespace asio = boost::asio;
 using asio::ip::tcp;
 
-
-std::chrono::steady_clock::time_point start_time = std::chrono::steady_clock::now();
-
-double calculate_frequency()
+struct SensorInfo
 {
-    std::chrono::steady_clock::time_point end_time = std::chrono::steady_clock::now();
-    std::chrono::duration<double> elapsed_seconds = end_time - start_time;
+    std::string id;
+    int interval;
+    SensorInfo(std::string id, int interval)
+        : id(id), interval(interval) {}
+};
 
-    start_time = end_time;
-    
-    return elapsed_seconds.count();
-}
+std::map<std::pair<std::string, std::string>, std::time_t> last_sensor_activity;
+std::map<std::pair<std::string, std::string>, std::vector<float>> sensor_values_history;
+
+
+std::vector<SensorInfo> firstMessages;
+std::vector<std::string> machine_ids;
 
 std::string timestamp2UNIX(const std::string &timestamp)
 {
@@ -49,12 +51,10 @@ std::string UNIX2timestamp(const std::time_t &timestamp)
     return std::string(buffer);
 }
 
-std::map<std::pair<std::string, std::string>, std::vector<float>> sensor_values_history;
-
 std::pair<float, float> calculate_mean_stddev(const std::vector<float> &data)
 {
-    float mean = std::accumulate(data.begin(), data.end(), 0.0) / data.size(); // soma os valores do vetor e divide pelo tamanho do vetor
-    float sq_sum = std::inner_product(data.begin(), data.end(), data.begin(), 0.0); // multiplica os valores do vetor por ele mesmo e soma
+    float mean = std::accumulate(data.begin(), data.end(), 0.0) / data.size();
+    float sq_sum = std::inner_product(data.begin(), data.end(), data.begin(), 0.0);
     float stddev = std::sqrt(sq_sum / data.size() - mean * mean);
     return {mean, stddev};
 }
@@ -66,12 +66,39 @@ bool is_outlier(float value, const std::vector<float> &data)
 
     auto [mean, stddev] = calculate_mean_stddev(data);
     float z_score = (value - mean) / stddev;
-    return std::abs(z_score) > 3;
-    // https://www.analyticsvidhya.com/blog/2022/08/dealing-with-outliers-using-the-z-score-method/
+    // return std::abs(z_score) > 3;
+    return true;
+}
+
+void processInitialMessage(const nlohmann::json &initialMessage)
+{
+    if (std::find(machine_ids.begin(), machine_ids.end(), initialMessage["machine_id"]) != machine_ids.end())
+    {
+        return;
+    }; // se o machine_id já estiver na lista, não faz nada
+
+    int minDataInterval = std::numeric_limits<int>::max(); // maior valor possível para int
+
+    for (const auto &sensor : initialMessage["sensors"])
+    {
+        int dataInterval = sensor["data_interval"];
+        if (dataInterval < minDataInterval)
+        {
+            minDataInterval = dataInterval;
+        }
+    }
+
+    firstMessages.push_back(SensorInfo(initialMessage["machine_id"], minDataInterval));
+    machine_ids.push_back(initialMessage["machine_id"]);
+    std::cout << "-> Set data interval:" << minDataInterval << " ms\n";
 }
 
 void post_metric(const std::string &machine_id, const std::string &sensor_id, const std::string &timestamp_str, const float value)
 {
+    if (firstMessages.empty())
+    {
+        return;
+    }
     try
     {
         boost::asio::io_service io_service;
@@ -97,13 +124,14 @@ void post_metric(const std::string &machine_id, const std::string &sensor_id, co
     }
 }
 
-std::map<std::pair<std::string, std::string>, std::time_t> last_sensor_activity;
-int frequency_sensor = 0;
-
-void processing_data_mosquitto()
+void processing_alarm_data(const int &interval)
 {
+    if (firstMessages.empty())
+    {
+        return;
+    }
+
     std::time_t current_time = std::time(nullptr);
-    double frequency_sensor = calculate_frequency() * 10;
     for (auto &activity : last_sensor_activity)
     {
         std::pair<std::string, std::string> machine_sensor_pair = activity.first;
@@ -111,16 +139,31 @@ void processing_data_mosquitto()
         std::string machine_id = activity.first.first;
         std::string sensor_id = activity.first.second;
 
-        if (current_time - last_time >= frequency_sensor && last_sensor_activity.size() != 0) // Valor de exemplo para inatividade
+        if (current_time - last_time >= (interval / 1000) * 10)
         {
             std::string alarm_path = machine_id + ".alarms.inactive." + sensor_id;
             std::string message = alarm_path + " 1 " + UNIX2timestamp(current_time) + "\n";
-            // Envie o alarme de inatividade individual para o Graphite.
             post_metric(machine_id, "alarms.inactive." + sensor_id, UNIX2timestamp(current_time), 1);
         }
-
     }
 }
+void processing_outlier_data(){
+    if(firstMessages.empty()){
+        return;
+    }
+    for(auto &sensor : firstMessages){
+        std::pair<std::string, std::string> machine_sensor_pair = {sensor.id, sensor.id};
+        if(sensor_values_history.find(machine_sensor_pair) != sensor_values_history.end()){
+            if(is_outlier(sensor_values_history[machine_sensor_pair].back(), sensor_values_history[machine_sensor_pair])){
+                std::string alarm_path = sensor.id + ".alarms.outlier." + sensor.id;
+                std::string message = alarm_path + " 1 " + UNIX2timestamp(std::time(nullptr)) + "\n";
+                post_metric(sensor.id, "alarms.outlier." + sensor.id, UNIX2timestamp(std::time(nullptr)), 1);
+                std::cout << "Outlier detected for " << sensor.id << ": " << sensor_values_history[machine_sensor_pair].back() << std::endl;
+            }
+        }
+    }
+}
+
 std::vector<std::string> split(const std::string &str, char delim)
 {
     std::vector<std::string> tokens;
@@ -138,7 +181,6 @@ int main(int argc, char *argv[])
     std::string clientId = "clientId";
     mqtt::async_client client(BROKER_ADDRESS, clientId);
 
-    // Create an MQTT callback.
     class callback : public virtual mqtt::callback
     {
     public:
@@ -147,28 +189,34 @@ int main(int argc, char *argv[])
             auto j = nlohmann::json::parse(msg->get_payload());
 
             std::string topic = msg->get_topic();
-            auto topic_parts = split(topic, '/');
-            std::string machine_id = topic_parts[2];
-            std::string sensor_id = topic_parts[3];
-
-            std::string timestamp = j["timestamp"];
-            float value = j["value"];
-            post_metric(machine_id, sensor_id, timestamp, value);
-
-            std::pair<std::string, std::string> machine_sensor_pair = {machine_id, sensor_id};
-            last_sensor_activity[machine_sensor_pair] = std::time(nullptr);
-
-            // Verificar se o valor atual é um outlier.
-            if (sensor_values_history.find(machine_sensor_pair) != sensor_values_history.end())
+            if (topic == "/sensor_monitors")
             {
-                if (is_outlier(value, sensor_values_history[machine_sensor_pair]))
+                processInitialMessage(j);
+                return;
+            }
+            else
+            {
+                auto topic_parts = split(topic, '/');
+                std::string machine_id = topic_parts[2];
+                std::string sensor_id = topic_parts[3];
+
+                std::string timestamp = j["timestamp"];
+                float value = j["value"];
+                post_metric(machine_id, sensor_id, timestamp, value);
+
+                std::pair<std::string, std::string> machine_sensor_pair = {machine_id, sensor_id};
+                last_sensor_activity[machine_sensor_pair] = std::time(nullptr);
+
+                /* if (sensor_values_history.find(machine_sensor_pair) != sensor_values_history.end()) //
                 {
-                    std::string alarm_path = machine_id + ".alarms.outlier." + sensor_id;
-                    std::string message = alarm_path + " 1 " + UNIX2timestamp(std::time(nullptr)) + "\n";
-                    // Envie o alarme de outlier individual para o Graphite.
-                    post_metric(machine_id, "alarms.outlier." + sensor_id, UNIX2timestamp(std::time(nullptr)), 1);
-                    std::cout << "Outlier detected for " << sensor_id << ": " << value << std::endl;
-                }
+                    if (is_outlier(value, sensor_values_history[machine_sensor_pair]))
+                    {
+                        std::string alarm_path = machine_id + ".alarms.outlier." + sensor_id;
+                        std::string message = alarm_path + " 1 " + UNIX2timestamp(std::time(nullptr)) + "\n";
+                        post_metric(machine_id, "alarms.outlier." + sensor_id, UNIX2timestamp(std::time(nullptr)), 1);
+                        std::cout << "Outlier detected for " << sensor_id << ": " << value << std::endl;
+                    }
+                } */
             }
         }
     };
@@ -176,7 +224,6 @@ int main(int argc, char *argv[])
     callback cb;
     client.set_callback(cb);
 
-    // Connect to the MQTT broker.
     mqtt::connect_options connOpts;
     connOpts.set_keep_alive_interval(20);
     connOpts.set_clean_session(true);
@@ -185,6 +232,7 @@ int main(int argc, char *argv[])
     {
         client.connect(connOpts)->wait();
         client.subscribe("/sensors/#", QOS);
+        client.subscribe("/sensor_monitors", QOS);
     }
     catch (mqtt::exception &e)
     {
@@ -192,10 +240,23 @@ int main(int argc, char *argv[])
         return EXIT_FAILURE;
     }
 
+
     while (true)
     {
-        processing_data_mosquitto();
-        std::this_thread::sleep_for(std::chrono::seconds(1)); // depois modificar o tempo para assim que chegar uma mensagem processar
+        if(firstMessages.empty()){
+            std::cout << "Waiting for initial messages..." << std::endl;
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            system("clear");
+            continue;
+        };
+
+        for (auto &sensor : firstMessages)
+        {
+
+            processing_alarm_data(sensor.interval);
+            processing_outlier_data();
+            std::this_thread::sleep_for(std::chrono::milliseconds(sensor.interval));
+        }
     }
 
     return EXIT_SUCCESS;
