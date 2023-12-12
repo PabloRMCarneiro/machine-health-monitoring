@@ -1,7 +1,0 @@
-data_processor -> g++ -std=c++11 -o data_processor data_processor.cpp -lpaho-mqttpp3 -lpaho-mqtt3as -lpthread
-
-sensor_monitor -> g++ -std=c++11 -o sensor_monitor sensor_monitor.cpp -lpaho-mqttpp3 -lpaho-mqtt3as -lpthread
-
-mqtt_publisher -> g++ -std=c++11 -o pub mqtt_publisher.cpp -lpaho-mqttpp3 -lpaho-mqtt3as -lpthread
-
-mqtt_subscriber -> g++ -std=c++11 -o sub mqtt_subscriber.cpp -lpaho-mqttpp3 -lpaho-mqtt3as -lpthread

@@ -234,7 +234,7 @@ int main(int argc, char *argv[])
     {
         client.connect(connOpts)->wait();
         client.subscribe("/sensors/#", QOS);
-        client.subscribe("/sensor_monitors", QOS); // first messages
+        client.subscribe("/sensor_monitors", QOS); 
     }
     catch (mqtt::exception &e)
     {
