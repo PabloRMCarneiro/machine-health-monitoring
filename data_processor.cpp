@@ -30,7 +30,6 @@ struct SensorInfo
 std::map<std::pair<std::string, std::string>, std::time_t> last_sensor_activity;
 std::map<std::pair<std::string, std::string>, std::vector<float>> sensor_values_history;
 
-
 std::vector<SensorInfo> firstMessages;
 std::vector<std::string> machine_ids;
 
@@ -66,8 +65,7 @@ bool is_outlier(float value, const std::vector<float> &data)
 
     auto [mean, stddev] = calculate_mean_stddev(data);
     float z_score = (value - mean) / stddev;
-    // return std::abs(z_score) > 3;
-    return true;
+    return std::abs(z_score) > 3;
 }
 
 void processInitialMessage(const nlohmann::json &initialMessage)
@@ -90,7 +88,6 @@ void processInitialMessage(const nlohmann::json &initialMessage)
 
     firstMessages.push_back(SensorInfo(initialMessage["machine_id"], minDataInterval));
     machine_ids.push_back(initialMessage["machine_id"]);
-    std::cout << "-> Set data interval:" << minDataInterval << " ms\n";
 }
 
 void post_metric(const std::string &machine_id, const std::string &sensor_id, const std::string &timestamp_str, const float value)
@@ -147,18 +144,22 @@ void processing_alarm_data(const int &interval)
         }
     }
 }
-void processing_outlier_data(){
-    if(firstMessages.empty()){
+void processing_outlier_data()
+{
+    if (firstMessages.empty())
+    {
         return;
     }
-    for(auto &sensor : firstMessages){
+    for (auto &sensor : firstMessages)
+    {
         std::pair<std::string, std::string> machine_sensor_pair = {sensor.id, sensor.id};
-        if(sensor_values_history.find(machine_sensor_pair) != sensor_values_history.end()){
-            if(is_outlier(sensor_values_history[machine_sensor_pair].back(), sensor_values_history[machine_sensor_pair])){
+        if (sensor_values_history.find(machine_sensor_pair) != sensor_values_history.end())
+        {
+            if (is_outlier(sensor_values_history[machine_sensor_pair].back(), sensor_values_history[machine_sensor_pair]))
+            {
                 std::string alarm_path = sensor.id + ".alarms.outlier." + sensor.id;
                 std::string message = alarm_path + " 1 " + UNIX2timestamp(std::time(nullptr)) + "\n";
                 post_metric(sensor.id, "alarms.outlier." + sensor.id, UNIX2timestamp(std::time(nullptr)), 1);
-                std::cout << "Outlier detected for " << sensor.id << ": " << sensor_values_history[machine_sensor_pair].back() << std::endl;
             }
         }
     }
@@ -207,16 +208,17 @@ int main(int argc, char *argv[])
                 std::pair<std::string, std::string> machine_sensor_pair = {machine_id, sensor_id};
                 last_sensor_activity[machine_sensor_pair] = std::time(nullptr);
 
-                /* if (sensor_values_history.find(machine_sensor_pair) != sensor_values_history.end()) //
+                sensor_values_history[machine_sensor_pair].push_back(value);
+
+                if (sensor_values_history.find(machine_sensor_pair) != sensor_values_history.end())
                 {
                     if (is_outlier(value, sensor_values_history[machine_sensor_pair]))
                     {
                         std::string alarm_path = machine_id + ".alarms.outlier." + sensor_id;
                         std::string message = alarm_path + " 1 " + UNIX2timestamp(std::time(nullptr)) + "\n";
                         post_metric(machine_id, "alarms.outlier." + sensor_id, UNIX2timestamp(std::time(nullptr)), 1);
-                        std::cout << "Outlier detected for " << sensor_id << ": " << value << std::endl;
                     }
-                } */
+                }
             }
         }
     };
@@ -232,7 +234,7 @@ int main(int argc, char *argv[])
     {
         client.connect(connOpts)->wait();
         client.subscribe("/sensors/#", QOS);
-        client.subscribe("/sensor_monitors", QOS);
+        client.subscribe("/sensor_monitors", QOS); // first messages
     }
     catch (mqtt::exception &e)
     {
@@ -240,10 +242,10 @@ int main(int argc, char *argv[])
         return EXIT_FAILURE;
     }
 
-
     while (true)
     {
-        if(firstMessages.empty()){
+        if (firstMessages.empty())
+        {
             std::cout << "Waiting for initial messages..." << std::endl;
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
             system("clear");
@@ -252,9 +254,7 @@ int main(int argc, char *argv[])
 
         for (auto &sensor : firstMessages)
         {
-
             processing_alarm_data(sensor.interval);
-            processing_outlier_data();
             std::this_thread::sleep_for(std::chrono::milliseconds(sensor.interval));
         }
     }
